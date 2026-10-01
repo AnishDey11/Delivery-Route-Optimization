@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delivery Route Optimizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style> textarea, input { font-family: monospace; } </style>
+</head>
+<body class="bg-gray-900 text-white font-sans antialiased p-8">
+
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-3xl font-bold mb-8 text-blue-400">Delivery Route Optimization Dashboard</h1>
+        
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Inputs -->
+            <div class="bg-gray-800 p-6 rounded-xl shadow-lg flex flex-col gap-4">
+                <h2 class="text-xl font-semibold text-gray-200">Input Data</h2>
+                
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Distance Matrix (JSON Array):</label>
+                    <textarea id="inputMatrix" rows="8" class="w-full bg-gray-900 border border-gray-600 rounded p-3 text-sm focus:outline-none focus:border-blue-500">
+[
+  [0, 12, 29, 22, 13, 24],
+  [12, 0, 19, 146, 25, 16],
+  [29, 19, 0, 21, 17, 18],
+  [22, 14, 21, 0, 27, 11],
+  [13, 25, 17, 27, 0, 20],
+  [24, 16, 18, 11, 20, 0]
+]</textarea>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Initial Route (comma separated):</label>
+                    <input type="text" id="inputRoute" value="0,1,2,3,4,5,0" class="w-full bg-gray-900 border border-gray-600 rounded p-3 text-sm focus:outline-none focus:border-blue-500">
+                </div>
+
+                <button onclick="calculateRoutes()" class="bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded mt-2 transition">
+                    Run Algorithms
+                </button>
+            </div>
+
+            <!-- Canvas Visualization -->
+            <div class="bg-gray-800 p-6 rounded-xl shadow-lg flex flex-col items-center">
+                <h2 class="text-xl font-semibold mb-4 text-gray-200">Route Map</h2>
+                <canvas id="routeCanvas" width="400" height="400" class="bg-gray-900 rounded border border-gray-700 w-full max-w-[400px]"></canvas>
+                <p class="mt-4 text-sm text-gray-400">Node 0 is the Depot. Arrows indicate direction. Numbers represent distance.</p>
+            </div>
+
+            <!-- Results & Controls -->
+            <div class="bg-gray-800 p-6 rounded-xl shadow-lg flex flex-col gap-4">
+                <h2 class="text-xl font-semibold mb-2 text-gray-200">Algorithm Results</h2>
+                
+                <div id="loading" class="text-yellow-400 font-bold hidden">Calculating routes...</div>
+                
+                <div id="results" class="hidden flex-col gap-4">
+                    <div class="p-4 rounded bg-gray-700 border-l-4 border-gray-500 flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold text-gray-300">Initial Route</h3>
+                            <p class="text-xs font-mono mt-1" id="res-initial-route"></p>
+                            <p class="text-sm font-semibold mt-1 text-red-400">Dist: <span id="res-initial-dist"></span></p>
+                        </div>
+                        <button onclick="drawSelectedRoute('initial')" class="bg-gray-600 hover:bg-gray-500 px-3 py-2 rounded font-bold text-xs">View</button>
+                    </div>
+
+                    <div class="p-4 rounded bg-gray-700 border-l-4 border-blue-500 flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold text-blue-300">2-Opt Optimization</h3>
+                            <p class="text-xs font-mono mt-1" id="res-opt-route"></p>
+                            <p class="text-sm font-semibold mt-1 text-green-400">Dist: <span id="res-opt-dist"></span></p>
+                        </div>
+                        <button onclick="drawSelectedRoute('opt')" class="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded font-bold text-xs">View</button>
+                    </div>
+
+                    <div class="p-4 rounded bg-gray-700 border-l-4 border-purple-500 flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold text-purple-300">Nearest Neighbor</h3>
+                            <p class="text-xs font-mono mt-1" id="res-nn-route"></p>
+                            <p class="text-sm font-semibold mt-1 text-green-400">Dist: <span id="res-nn-dist"></span></p>
+                        </div>
+                        <button onclick="drawSelectedRoute('nn')" class="bg-purple-600 hover:bg-purple-500 px-3 py-2 rounded font-bold text-xs">View</button>
+                    </div>
+
+                    <div class="p-4 rounded bg-gray-700 border-l-4 border-yellow-500 flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold text-yellow-300">Best Random Search</h3>
+                            <p class="text-xs font-mono mt-1" id="res-random-route"></p>
+                            <p class="text-sm font-semibold mt-1 text-yellow-400">Dist: <span id="res-random-dist"></span></p>
+                        </div>
+                        <button onclick="drawSelectedRoute('random')" class="bg-yellow-600 hover:bg-yellow-500 text-gray-900 px-3 py-2 rounded font-bold text-xs">View</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let routeData = {};
+        let nodePositions = {};
+        let currentMatrix = []; // Save matrix to pull distance labels
+        const canvas = document.getElementById('routeCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Dynamically generate node layout in a circle
+        function generateNodePositions(numNodes) {
+            const positions = {};
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = 150;
+            
+            for (let i = 0; i < numNodes; i++) {
+                // Top point is -90 degrees (Math.PI / 2)
+                const angle = -Math.PI / 2 + (Math.PI * 2 * i) / numNodes;
+                positions[i] = {
+                    x: centerX + radius * Math.cos(angle),
+                    y: centerY + radius * Math.sin(angle)
+                };
+            }
+            return positions;
+        }
+
+        async function calculateRoutes() {
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('results').classList.add('hidden');
+            
+            try {
+                // Parse inputs
+                const matrixStr = document.getElementById('inputMatrix').value;
+                const routeStr = document.getElementById('inputRoute').value;
+                
+                const matrix = JSON.parse(matrixStr);
+                currentMatrix = matrix; // Save matrix globally for the canvas drawing function
+                
+                const initial_route = routeStr.split(',').map(x => parseInt(x.trim(), 10));
+
+                const response = await fetch('/api/calculate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ matrix, initial_route })
+                });
+
+                if (!response.ok) throw new Error("Invalid Input Parameters");
+
+                routeData = await response.json();
+                nodePositions = generateNodePositions(routeData.num_nodes);
+                
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('results').classList.remove('hidden');
+                document.getElementById('results').classList.add('flex');
+
+                for (const key of ['initial', 'opt', 'nn', 'random']) {
+                    document.getElementById(`res-${key}-route`).innerText = `[${routeData[key].route.join(', ')}]`;
+                    document.getElementById(`res-${key}-dist`).innerText = routeData[key].distance;
+                }
+
+                drawSelectedRoute('opt');
+
+            } catch (error) {
+                alert("Error: Make sure Matrix is valid JSON and Route is comma-separated integers.");
+                document.getElementById('loading').classList.add('hidden');
+            }
+        }
+
+        function drawSelectedRoute(type) {
+            const route = routeData[type].route;
+            const colors = {
+                'initial': '#9ca3af', // gray
+                'opt': '#3b82f6',     // blue
+                'nn': '#a855f7',      // purple
+                'random': '#eab308'   // yellow
+            };
+            drawCanvas(route, colors[type]);
+        }
+
+        function drawCanvas(route, lineColor) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw Edges with Directional Arrows & Distances
+            for (let i = 0; i < route.length - 1; i++) {
+                const startNode = route[i];
+                const endNode = route[i + 1];
+                const start = nodePositions[startNode];
+                const end = nodePositions[endNode];
+                
+                // Draw Line
+                ctx.beginPath();
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = lineColor;
+                ctx.moveTo(start.x, start.y);
+                ctx.lineTo(end.x, end.y);
+                ctx.stroke();
+
+                // Calculate Arrowhead position (pull back so it doesn't overlap circle)
+                const angle = Math.atan2(end.y - start.y, end.x - start.x);
+                const pullBackDistance = 22; 
+                const arrowX = end.x - pullBackDistance * Math.cos(angle);
+                const arrowY = end.y - pullBackDistance * Math.sin(angle);
+                const headlen = 12; // Length of the arrowhead
+
+                // Draw Arrowhead
+                ctx.beginPath();
+                ctx.fillStyle = lineColor;
+                ctx.moveTo(arrowX, arrowY);
+                ctx.lineTo(arrowX - headlen * Math.cos(angle - Math.PI / 6), arrowY - headlen * Math.sin(angle - Math.PI / 6));
+                ctx.lineTo(arrowX - headlen * Math.cos(angle + Math.PI / 6), arrowY - headlen * Math.sin(angle + Math.PI / 6));
+                ctx.closePath();
+                ctx.fill();
+
+                // Draw Distance Label in the middle of the line
+                if (currentMatrix.length > 0 && currentMatrix[startNode] !== undefined) {
+                    const dist = currentMatrix[startNode][endNode];
+                    const midX = (start.x + end.x) / 2;
+                    const midY = (start.y + end.y) / 2;
+
+                    // Set up font styling first so we can measure the text width accurately
+                    ctx.font = 'bold 12px Arial';
+                    const textStr = dist.toString();
+                    const textWidth = ctx.measureText(textStr).width + 8; // add small padding
+                    const textHeight = 18;
+                    
+                    // Draw a dark background pill behind text so line doesn't cross through it
+                    ctx.fillStyle = '#111827'; // Dark background matching canvas
+                    ctx.fillRect(midX - (textWidth / 2), midY - (textHeight / 2), textWidth, textHeight);
+
+                    // Draw the distance number text
+                    ctx.fillStyle = '#ffffff'; // White text
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(textStr, midX, midY);
+                }
+            }
+
+            // Draw Nodes
+            const numNodes = Object.keys(nodePositions).length;
+            for (let i = 0; i < numNodes; i++) {
+                const pos = nodePositions[i];
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 16, 0, Math.PI * 2);
+                ctx.fillStyle = i === 0 ? '#ef4444' : '#1f2937'; 
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#ffffff';
+                ctx.stroke();
+
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '14px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(i.toString(), pos.x, pos.y);
+            }
+        }
+
+        // Initialize App on load
+        calculateRoutes();
+    </script>
+</body>
+</html>
